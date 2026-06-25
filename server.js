@@ -88,8 +88,11 @@ async function searchWithOfficialAPI(q) {
   const key = process.env.YOUTUBE_API_KEY;
 
   // Search videos
+  const appUrl = process.env.APP_URL || 'https://jukebox-cz25.onrender.com/';
+  const headers = { 'Referer': appUrl, 'Origin': appUrl };
+
   const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&key=${key}`;
-  const searchRes = await fetch(searchUrl);
+  const searchRes = await fetch(searchUrl, { headers });
   const searchData = await searchRes.json();
   if (!searchRes.ok || searchData.error) {
     const msg = searchData.error?.message || searchRes.status;
@@ -103,7 +106,7 @@ async function searchWithOfficialAPI(q) {
   // Fetch durations in one call
   const ids = items.map(i => i.id.videoId).join(',');
   const detailUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${key}`;
-  const detailRes = await fetch(detailUrl);
+  const detailRes = await fetch(detailUrl, { headers });
   const detailData = detailRes.ok ? await detailRes.json() : { items: [] };
   const durationMap = Object.fromEntries(
     (detailData.items || []).map(v => [v.id, parseDuration(v.contentDetails?.duration)])
