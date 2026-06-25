@@ -69,80 +69,32 @@ app.get('/api/parties', (req, res) => {
   res.json(list);
 });
 
-// YouTube search — API officielle si YOUTUBE_API_KEY dispo, sinon youtube-sr
+// Expose YouTube API key au frontend (la clé est déjà restreinte au domaine)
+app.get('/api/yt-config', (req, res) => {
+  res.json({ apiKey: process.env.YOUTUBE_API_KEY || null });
+});
+
+// Fallback scraper server-side (si pas de clé API)
 app.get('/api/search', async (req, res) => {
   const q = req.query.q;
   if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
+  if (process.env.YOUTUBE_API_KEY) {
+    return res.status(400).json({ error: 'USE_CLIENT_API' });
+  }
   try {
-    const results = process.env.YOUTUBE_API_KEY
-      ? await searchWithOfficialAPI(q)
-      : await searchWithScraper(q);
-    res.json(results);
+    const results = await YouTube.search(q, { limit: 10, type: 'video' });
+    res.json(results.map(v => ({
+      id: v.id,
+      title: v.title,
+      thumbnail: v.thumbnail?.url || `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`,
+      duration: v.durationFormatted || '',
+      channel: v.channel?.name || '',
+    })));
   } catch (e) {
     console.error('Search error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
-
-async function searchWithOfficialAPI(q) {
-  const key = process.env.YOUTUBE_API_KEY;
-
-  // Search videos
-  const appUrl = process.env.APP_URL || 'https://jukebox-cz25.onrender.com/';
-  const headers = { 'Referer': appUrl, 'Origin': appUrl };
-
-  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&key=${key}`;
-  const searchRes = await fetch(searchUrl, { headers });
-  const searchData = await searchRes.json();
-  if (!searchRes.ok || searchData.error) {
-    const msg = searchData.error?.message || searchRes.status;
-    console.error('YouTube API error:', JSON.stringify(searchData.error || searchRes.status));
-    throw new Error(`YouTube API: ${msg}`);
-  }
-
-  const items = searchData.items || [];
-  if (items.length === 0) return [];
-
-  // Fetch durations in one call
-  const ids = items.map(i => i.id.videoId).join(',');
-  const detailUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${key}`;
-  const detailRes = await fetch(detailUrl, { headers });
-  const detailData = detailRes.ok ? await detailRes.json() : { items: [] };
-  const durationMap = Object.fromEntries(
-    (detailData.items || []).map(v => [v.id, parseDuration(v.contentDetails?.duration)])
-  );
-
-  return items.map(i => ({
-    id: i.id.videoId,
-    title: i.snippet.title,
-    channel: i.snippet.channelTitle,
-    thumbnail: i.snippet.thumbnails?.medium?.url || i.snippet.thumbnails?.default?.url || `https://img.youtube.com/vi/${i.id.videoId}/mqdefault.jpg`,
-    duration: durationMap[i.id.videoId] || '',
-  }));
-}
-
-// Parse ISO 8601 duration (PT3M45S → 3:45)
-function parseDuration(iso) {
-  if (!iso) return '';
-  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-  if (!m) return '';
-  const h = parseInt(m[1] || 0);
-  const min = parseInt(m[2] || 0);
-  const s = parseInt(m[3] || 0);
-  if (h > 0) return `${h}:${String(min).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  return `${min}:${String(s).padStart(2,'0')}`;
-}
-
-async function searchWithScraper(q) {
-  const results = await YouTube.search(q, { limit: 10, type: 'video' });
-  return results.map(v => ({
-    id: v.id,
-    title: v.title,
-    thumbnail: v.thumbnail?.url || `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`,
-    duration: v.durationFormatted || '',
-    channel: v.channel?.name || '',
-  }));
-}
 
 // Extract video ID from a YouTube URL (server-side validation only)
 app.get('/api/lookup', (req, res) => {

@@ -1,12 +1,16 @@
 // ── Globals ──────────────────────────────────────────────────────────────────
 const socket = io();
-let currentParty = null;  // { name, role, guestName }
+let currentParty = null;
 let ytPlayer = null;
 let ytReady = false;
-let searchTab = 'search'; // 'search' | 'url'
-let queueTab = 'queue';   // 'queue' | 'history'
+let searchTab = 'search';
+let queueTab = 'queue';
 let selectedTheme = 'dark';
 let logoDataUrl = null;
+let ytApiKey = null;
+
+// Charger la clé API YouTube au démarrage
+fetch('/api/yt-config').then(r => r.json()).then(d => { ytApiKey = d.apiKey; }).catch(() => {});
 
 // Invidious public instances to try for client-side search
 const INVIDIOUS_INSTANCES = [
@@ -725,6 +729,42 @@ function switchTab(tab) {
   setTimeout(() => (tab === 'search' ? $('search-input') : $('url-input'))?.focus(), 50);
 }
 
+// ── YouTube Data API v3 (client-side, browser envoie le bon Referer) ───────────
+async function searchYouTubeAPI(q, key) {
+  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&key=${key}`;
+  const searchRes = await fetch(searchUrl);
+  const searchData = await searchRes.json();
+  if (!searchRes.ok || searchData.error) throw new Error(searchData.error?.message || `Erreur ${searchRes.status}`);
+
+  const items = searchData.items || [];
+  if (items.length === 0) return [];
+
+  // Récupérer les durées
+  const ids = items.map(i => i.id.videoId).join(',');
+  const detailRes = await fetch(`https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${key}`);
+  const detailData = detailRes.ok ? await detailRes.json() : { items: [] };
+  const durationMap = Object.fromEntries(
+    (detailData.items || []).map(v => [v.id, parseDuration(v.contentDetails?.duration)])
+  );
+
+  return items.map(i => ({
+    id: i.id.videoId,
+    title: i.snippet.title,
+    channel: i.snippet.channelTitle,
+    thumbnail: i.snippet.thumbnails?.medium?.url || `https://img.youtube.com/vi/${i.id.videoId}/mqdefault.jpg`,
+    duration: durationMap[i.id.videoId] || '',
+  }));
+}
+
+function parseDuration(iso) {
+  if (!iso) return '';
+  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return '';
+  const h = parseInt(m[1] || 0), min = parseInt(m[2] || 0), s = parseInt(m[3] || 0);
+  if (h > 0) return `${h}:${String(min).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${min}:${String(s).padStart(2,'0')}`;
+}
+
 // ── YouTube Search via Invidious (client-side) ─────────────────────────────────
 async function tryInvidiousSearch(query) {
   for (const base of INVIDIOUS_INSTANCES) {
@@ -745,40 +785,43 @@ async function doSearch() {
 
   $('search-results').innerHTML = `<div class="search-loading"><div class="spinner"></div>Recherche en cours…</div>`;
 
-  // Try server-side search first
   let songs = null;
-  let serverError = null;
-  try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    if (res.ok && Array.isArray(data) && data.length > 0) {
-      songs = data;
-    } else if (!res.ok) {
-      serverError = data.error || `Erreur ${res.status}`;
+  let searchError = null;
+
+  // 1. API officielle depuis le navigateur (le browser envoie le bon Referer)
+  if (ytApiKey) {
+    try {
+      songs = await searchYouTubeAPI(q, ytApiKey);
+    } catch (e) {
+      searchError = e.message;
     }
-  } catch (e) {
-    serverError = e.message;
   }
 
-  // Fallback: Invidious client-side
+  // 2. Fallback : scraper serveur
+  if (!songs) {
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (res.ok && Array.isArray(data) && data.length > 0) songs = data;
+      else if (!res.ok && data.error !== 'USE_CLIENT_API') searchError = data.error;
+    } catch {}
+  }
+
+  // 3. Fallback : Invidious
   if (!songs) {
     const inv = await tryInvidiousSearch(q);
-    if (inv) {
-      songs = inv.slice(0, 8).map(v => ({
-        id: v.videoId,
-        title: v.title,
-        channel: v.author,
-        thumbnail: (v.videoThumbnails?.find(t => t.quality === 'medium') || v.videoThumbnails?.[0])?.url
-          || `https://img.youtube.com/vi/${v.videoId}/mqdefault.jpg`,
-        duration: formatDuration(v.lengthSeconds),
-      }));
-    }
+    if (inv) songs = inv.slice(0, 8).map(v => ({
+      id: v.videoId, title: v.title, channel: v.author,
+      thumbnail: (v.videoThumbnails?.find(t => t.quality === 'medium') || v.videoThumbnails?.[0])?.url
+        || `https://img.youtube.com/vi/${v.videoId}/mqdefault.jpg`,
+      duration: formatDuration(v.lengthSeconds),
+    }));
   }
 
   if (!songs) {
     $('search-results').innerHTML = `
       <div class="search-empty" style="color:var(--accent)">
-        ${serverError ? `<strong>${escHtml(serverError)}</strong><br><br>` : ''}
+        ${searchError ? `<strong>${escHtml(searchError)}</strong><br><br>` : 'Recherche indisponible.<br>'}
         <button class="btn btn-ghost" style="margin-top:.5rem;font-size:.82rem" onclick="switchTab('url')">Utiliser un lien YouTube →</button>
       </div>`;
     return;
