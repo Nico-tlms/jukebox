@@ -745,15 +745,20 @@ async function doSearch() {
 
   $('search-results').innerHTML = `<div class="search-loading"><div class="spinner"></div>Recherche en cours…</div>`;
 
-  // Try server-side search first (youtube-sr)
+  // Try server-side search first
   let songs = null;
+  let serverError = null;
   try {
     const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) songs = data;
+    const data = await res.json();
+    if (res.ok && Array.isArray(data) && data.length > 0) {
+      songs = data;
+    } else if (!res.ok) {
+      serverError = data.error || `Erreur ${res.status}`;
     }
-  } catch {}
+  } catch (e) {
+    serverError = e.message;
+  }
 
   // Fallback: Invidious client-side
   if (!songs) {
@@ -773,8 +778,8 @@ async function doSearch() {
   if (!songs) {
     $('search-results').innerHTML = `
       <div class="search-empty" style="color:var(--accent)">
-        Recherche indisponible.<br>
-        <button class="btn btn-ghost" style="margin-top:.75rem;font-size:.82rem" onclick="switchTab('url')">Utiliser un lien YouTube →</button>
+        ${serverError ? `<strong>${escHtml(serverError)}</strong><br><br>` : ''}
+        <button class="btn btn-ghost" style="margin-top:.5rem;font-size:.82rem" onclick="switchTab('url')">Utiliser un lien YouTube →</button>
       </div>`;
     return;
   }
