@@ -88,7 +88,7 @@ async function searchWithOfficialAPI(q) {
   const key = process.env.YOUTUBE_API_KEY;
 
   // Search videos
-  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&videoCategoryId=10&key=${key}`;
+  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&key=${key}`;
   const searchRes = await fetch(searchUrl);
   if (!searchRes.ok) throw new Error(`YouTube API error: ${searchRes.status}`);
   const searchData = await searchRes.json();
