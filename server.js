@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
+const YouTube = require('youtube-sr').default;
 
 const app = express();
 const server = http.createServer(app);
@@ -58,6 +59,24 @@ app.get('/api/parties', (req, res) => {
     guestCount: io.sockets.adapter.rooms.get(p.name)?.size ?? 0,
   }));
   res.json(list);
+});
+
+// YouTube search (server-side)
+app.get('/api/search', async (req, res) => {
+  const q = req.query.q;
+  if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
+  try {
+    const results = await YouTube.search(q, { limit: 8, type: 'video' });
+    res.json(results.map(v => ({
+      id: v.id,
+      title: v.title,
+      thumbnail: v.thumbnail?.url || `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`,
+      duration: v.durationFormatted || '',
+      channel: v.channel?.name || '',
+    })));
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur de recherche YouTube' });
+  }
 });
 
 // Extract video ID from a YouTube URL (server-side validation only)

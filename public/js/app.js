@@ -566,30 +566,44 @@ async function doSearch() {
 
   $('search-results').innerHTML = `<div class="search-loading"><div class="spinner"></div>Recherche en cours…</div>`;
 
-  const results = await tryInvidiousSearch(q);
+  // Try server-side search first (youtube-sr)
+  let songs = null;
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) songs = data;
+    }
+  } catch {}
 
-  if (!results) {
+  // Fallback: Invidious client-side
+  if (!songs) {
+    const inv = await tryInvidiousSearch(q);
+    if (inv) {
+      songs = inv.slice(0, 8).map(v => ({
+        id: v.videoId,
+        title: v.title,
+        channel: v.author,
+        thumbnail: (v.videoThumbnails?.find(t => t.quality === 'medium') || v.videoThumbnails?.[0])?.url
+          || `https://img.youtube.com/vi/${v.videoId}/mqdefault.jpg`,
+        duration: formatDuration(v.lengthSeconds),
+      }));
+    }
+  }
+
+  if (!songs) {
     $('search-results').innerHTML = `
       <div class="search-empty" style="color:var(--accent)">
-        Recherche indisponible depuis ce réseau.<br>
+        Recherche indisponible.<br>
         <button class="btn btn-ghost" style="margin-top:.75rem;font-size:.82rem" onclick="switchTab('url')">Utiliser un lien YouTube →</button>
       </div>`;
     return;
   }
 
-  if (results.length === 0) {
+  if (songs.length === 0) {
     $('search-results').innerHTML = `<div class="search-empty">Aucun résultat trouvé.</div>`;
     return;
   }
-
-  const songs = results.slice(0, 8).map(v => ({
-    id: v.videoId,
-    title: v.title,
-    channel: v.author,
-    thumbnail: (v.videoThumbnails?.find(t => t.quality === 'medium') || v.videoThumbnails?.[0])?.url
-      || `https://img.youtube.com/vi/${v.videoId}/mqdefault.jpg`,
-    duration: formatDuration(v.lengthSeconds),
-  }));
 
   $('search-results').innerHTML = `<div class="search-results">
     ${songs.map((v, i) => `
