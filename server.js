@@ -87,7 +87,7 @@ app.get('*', (req, res) => res.sendFile(__dirname + '/public/index.html'));
 
 io.on('connection', (socket) => {
 
-  socket.on('join-party', ({ partyName, role, password }, cb) => {
+  socket.on('join-party', ({ partyName, role, password, guestName }, cb) => {
     const party = parties.get(partyName?.toLowerCase());
     if (!party) return cb({ error: 'Party introuvable' });
     if (party.password && party.password !== password) return cb({ error: 'Mot de passe incorrect' });
@@ -102,6 +102,7 @@ io.on('connection', (socket) => {
     socket.join(partyName.toLowerCase());
     socket.data.partyName = partyName.toLowerCase();
     socket.data.role = role;
+    socket.data.guestName = role === 'host' ? 'HOST' : (guestName?.trim().slice(0, 30) || 'Anonyme');
 
     cb({
       ok: true,
@@ -119,7 +120,7 @@ io.on('connection', (socket) => {
     const party = parties.get(partyName?.toLowerCase());
     if (!party) return cb?.({ error: 'Party introuvable' });
 
-    const entry = { ...song, queueId: uuidv4(), addedAt: new Date() };
+    const entry = { ...song, queueId: uuidv4(), addedBy: socket.data.guestName || 'Anonyme', addedAt: new Date() };
     party.queue.push(entry);
 
     io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });

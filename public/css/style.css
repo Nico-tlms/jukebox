@@ -459,6 +459,57 @@ input::placeholder { color: var(--muted); }
 .pi-meta { font-size: .8rem; color: var(--muted); }
 .pi-badge { font-size: .7rem; }
 
+/* ── Added-by badge ── */
+.qi-addedby {
+  font-size: .7rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: .1rem .5rem;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── QR Code ── */
+.qr-card { text-align: center; }
+.qr-wrap {
+  display: inline-block;
+  background: #fff;
+  border-radius: 10px;
+  padding: 12px;
+  margin: .75rem 0;
+}
+.qr-wrap canvas, .qr-wrap svg { display: block; }
+.qr-url { font-size: .78rem; color: var(--muted); word-break: break-all; }
+
+/* ── Search tabs ── */
+.search-tabs {
+  display: flex;
+  gap: .25rem;
+  margin-bottom: 1rem;
+  background: var(--surface2);
+  border-radius: 8px;
+  padding: 3px;
+}
+.search-tab {
+  flex: 1;
+  padding: .45rem .75rem;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: .85rem;
+  font-weight: 500;
+  transition: background .15s, color .15s;
+}
+.search-tab.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 4px rgba(0,0,0,.3);
+}
+
 /* ── Offline banner ── */
 .offline-banner {
   background: rgba(255,45,85,.12);

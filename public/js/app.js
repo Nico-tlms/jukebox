@@ -1,8 +1,20 @@
 // ── Globals ──────────────────────────────────────────────────────────────────
 const socket = io();
-let currentParty = null;  // { name, role }
+let currentParty = null;  // { name, role, guestName }
 let ytPlayer = null;
 let ytReady = false;
+let searchTab = 'search'; // 'search' | 'url'
+
+// Invidious public instances to try for client-side search
+const INVIDIOUS_INSTANCES = [
+  'https://invidious.nerdvpn.de',
+  'https://inv.tux.pizza',
+  'https://invidious.privacydev.net',
+  'https://invidious.perennialte.ch',
+  'https://iv.ggtyler.dev',
+  'https://yt.jagrg.org',
+  'https://invidious.io.lol',
+];
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -16,10 +28,6 @@ function toast(msg, type = 'info', duration = 3000) {
   setTimeout(() => el.remove(), duration);
 }
 
-function html(strings, ...vals) {
-  return strings.reduce((a, s, i) => a + s + (vals[i] !== undefined ? String(vals[i]) : ''), '');
-}
-
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
@@ -29,24 +37,17 @@ function route() {
   const path = window.location.pathname.replace(/^\//, '');
   const params = new URLSearchParams(window.location.search);
   const role = params.get('role');
-
   if (!path) {
     renderHome();
   } else {
-    const partyName = path.toLowerCase();
-    if (role === 'host' || role === 'guest') {
-      renderJoinForm(partyName, role);
-    } else {
-      renderJoinForm(partyName, null);
-    }
+    renderJoinForm(path.toLowerCase(), role);
   }
 }
 
 window.addEventListener('popstate', route);
 
-function navigate(path, replace = false) {
-  if (replace) history.replaceState(null, '', path);
-  else history.pushState(null, '', path);
+function navigate(path) {
+  history.pushState(null, '', path);
   route();
 }
 
@@ -82,13 +83,9 @@ function renderHome() {
   `;
 }
 
-let selectedMode = null;
-
 function selectMode(mode) {
-  selectedMode = mode;
   document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
   $(`card-${mode}`).classList.add('active');
-
   if (mode === 'host') renderHostPanel();
   else renderGuestPanel();
 }
@@ -120,9 +117,7 @@ async function createParty() {
   const name = $('host-name').value.trim();
   const password = $('host-pass').value;
   $('host-error').innerHTML = '';
-
   if (!name) return showError('host-error', 'Entrez un nom de party');
-
   try {
     const res = await fetch('/api/party/create', {
       method: 'POST',
@@ -187,7 +182,7 @@ function showError(containerId, msg) {
   $(containerId).innerHTML = `<div class="error-msg">${escHtml(msg)}</div>`;
 }
 
-// ── Join Form (password gate) ─────────────────────────────────────────────────
+// ── Join Form ─────────────────────────────────────────────────────────────────
 async function renderJoinForm(partyName, role) {
   app().innerHTML = `<div class="page center"><div class="card card-sm"><div class="spinner"></div></div></div>`;
 
@@ -209,54 +204,63 @@ async function renderJoinForm(partyName, role) {
   }
 
   const effectiveRole = role || 'guest';
+  const needsPassword = party.hasPassword;
+  const needsName = effectiveRole === 'guest';
 
-  if (!party.hasPassword || effectiveRole === 'host') {
-    // No password needed (host already set one at creation, but must verify on join)
-    if (!party.hasPassword) {
-      renderPartyPage(party, effectiveRole, '');
-      return;
-    }
+  if (!needsPassword && !needsName) {
+    renderPartyPage(party, effectiveRole, '', '');
+    return;
   }
 
-  // Show password form
   app().innerHTML = `
     <div class="page center">
       <div class="card card-sm">
-        <div class="card-title">🔒 ${escHtml(party.displayName)}</div>
+        <div class="card-title">${needsPassword ? '🔒' : '🎵'} ${escHtml(party.displayName)}</div>
         <div id="join-error"></div>
+        ${needsName ? `
+        <div class="form-group">
+          <label>Votre prénom / pseudo</label>
+          <input type="text" id="join-display-name" placeholder="ex: Juju, Marie…" maxlength="30" autofocus>
+        </div>` : ''}
+        ${needsPassword ? `
         <div class="form-group">
           <label>Mot de passe de la party</label>
-          <input type="password" id="join-pass" placeholder="Mot de passe" autofocus>
-        </div>
+          <input type="password" id="join-pass" placeholder="Mot de passe" ${needsName ? '' : 'autofocus'}>
+        </div>` : ''}
         <div style="display:flex;gap:.75rem">
           <button class="btn btn-ghost" onclick="navigate('/')">Annuler</button>
-          <button class="btn btn-primary" style="flex:1" onclick="submitPassword('${escHtml(party.name)}','${escHtml(effectiveRole)}')">Entrer →</button>
+          <button class="btn btn-primary" style="flex:1" onclick="submitJoin('${escHtml(party.name)}','${escHtml(effectiveRole)}')">Entrer →</button>
         </div>
       </div>
     </div>
   `;
-  $('join-pass').addEventListener('keydown', e => {
-    if (e.key === 'Enter') submitPassword(party.name, effectiveRole);
+  const firstInput = $('join-display-name') || $('join-pass');
+  firstInput?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitJoin(party.name, effectiveRole);
+  });
+  $('join-pass')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitJoin(party.name, effectiveRole);
   });
 }
 
-function submitPassword(partyName, role) {
-  const password = $('join-pass').value;
-  // We'll verify via socket join
-  fetchPartyAndRender(partyName, role, password);
-}
-
-async function fetchPartyAndRender(partyName, role, password) {
+async function submitJoin(partyName, role) {
+  const password = $('join-pass')?.value || '';
+  const guestName = $('join-display-name')?.value.trim() || '';
+  if (role === 'guest' && !guestName) {
+    showError('join-error', 'Entrez votre prénom ou pseudo');
+    return;
+  }
   const res = await fetch(`/api/party/${partyName}`);
   const party = await res.json();
-  renderPartyPage(party, role, password);
+  renderPartyPage(party, role, password, guestName);
 }
 
 // ── Party Page ────────────────────────────────────────────────────────────────
-function renderPartyPage(party, role, password) {
-  currentParty = { name: party.name, role };
+function renderPartyPage(party, role, password, guestName) {
+  currentParty = { name: party.name, role, guestName };
 
   const isHost = role === 'host';
+  const partyUrl = `${window.location.origin}/${party.name}`;
 
   app().innerHTML = `
     <div class="party-page">
@@ -264,13 +268,13 @@ function renderPartyPage(party, role, password) {
       <div class="topbar">
         <span class="topbar-logo">🎵</span>
         <span class="topbar-party">${escHtml(party.displayName)}</span>
-        <span class="topbar-badge ${isHost ? 'badge-host' : 'badge-guest'}">${isHost ? 'HOST' : 'INVITÉ'}</span>
+        <span class="topbar-badge ${isHost ? 'badge-host' : 'badge-guest'}">${isHost ? 'HOST' : escHtml(guestName || 'INVITÉ')}</span>
         <div class="topbar-spacer"></div>
         <div class="presence">
           <span class="dot" id="host-dot"></span>
           <span id="presence-text">—</span>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="leaveParty()" style="font-size:.82rem;padding:.4rem .8rem">Quitter</button>
+        <button class="btn btn-ghost" onclick="leaveParty()" style="font-size:.82rem;padding:.4rem .8rem">Quitter</button>
       </div>
 
       <div class="party-body">
@@ -302,7 +306,15 @@ function renderPartyPage(party, role, password) {
             <div id="yt-player"></div>
           </div>
           <div class="player-controls">
-            <button class="btn btn-ghost" style="flex:1" onclick="skipSong()" id="btn-skip">⏭ Suivant</button>
+            <button class="btn btn-ghost" style="flex:1" onclick="skipSong()">⏭ Suivant</button>
+          </div>
+
+          <!-- QR Code card -->
+          <div class="card qr-card">
+            <div style="font-size:.8rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.5rem">📱 Inviter des amis</div>
+            <div class="qr-wrap" id="qr-wrap"></div>
+            <div class="qr-url">${escHtml(partyUrl)}</div>
+            <button class="btn btn-ghost" style="margin-top:.75rem;font-size:.8rem;padding:.4rem .8rem" onclick="copyPartyUrl('${escHtml(partyUrl)}')">📋 Copier le lien</button>
           </div>
           ` : `
           <div class="card" style="text-align:center;padding:1.25rem">
@@ -322,10 +334,21 @@ function renderPartyPage(party, role, password) {
           <button class="btn-icon" onclick="closeSearch()">✕</button>
         </div>
         <div class="modal-body">
-          <p style="font-size:.82rem;color:var(--muted);margin-bottom:.85rem">Colle un lien YouTube ou un ID de vidéo</p>
-          <div class="search-bar">
-            <input type="text" id="search-input" placeholder="https://youtube.com/watch?v=... ou youtu.be/..." autocomplete="off">
-            <button class="btn btn-primary" onclick="doSearch()">Ajouter</button>
+          <div class="search-tabs">
+            <button class="search-tab active" id="tab-search" onclick="switchTab('search')">🔍 Rechercher</button>
+            <button class="search-tab" id="tab-url" onclick="switchTab('url')">🔗 Coller un lien</button>
+          </div>
+          <div id="tab-search-content">
+            <div class="search-bar">
+              <input type="search" id="search-input" placeholder="Rechercher une musique…" autocomplete="off">
+              <button class="btn btn-primary" onclick="doSearch()">Chercher</button>
+            </div>
+          </div>
+          <div id="tab-url-content" style="display:none">
+            <div class="search-bar">
+              <input type="text" id="url-input" placeholder="https://youtube.com/watch?v=… ou youtu.be/…" autocomplete="off">
+              <button class="btn btn-primary" onclick="doUrlLookup()">Ajouter</button>
+            </div>
           </div>
           <div id="search-results"></div>
         </div>
@@ -333,8 +356,8 @@ function renderPartyPage(party, role, password) {
     </div>
   `;
 
-  // Connect socket
-  socket.emit('join-party', { partyName: party.name, role, password }, (res) => {
+  // Socket join
+  socket.emit('join-party', { partyName: party.name, role, password, guestName }, (res) => {
     if (res.error) {
       toast(res.error, 'error');
       navigate('/');
@@ -344,40 +367,74 @@ function renderPartyPage(party, role, password) {
     updateNowPlaying(res.nowPlaying);
   });
 
-  // Setup search input
-  document.getElementById('search-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') doSearch();
-  });
+  $('search-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  $('url-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') doUrlLookup(); });
 
-  // Load YouTube API for host
-  if (isHost && !window.YT) {
-    const tag = document.createElement('script');
-    tag.src = 'https://www.youtube.com/iframe_api';
-    document.head.appendChild(tag);
-    window.onYouTubeIframeAPIReady = initYTPlayer;
-  } else if (isHost && window.YT && window.YT.Player) {
-    initYTPlayer();
+  // QR code
+  if (isHost) {
+    generateQR(partyUrl);
+    if (!window.YT) {
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      document.head.appendChild(tag);
+      window.onYouTubeIframeAPIReady = initYTPlayer;
+    } else if (window.YT?.Player) {
+      initYTPlayer();
+    }
   }
 }
 
 function leaveParty() {
-  socket.emit('leave-party');
   navigate('/');
+}
+
+function copyPartyUrl(url) {
+  navigator.clipboard?.writeText(url).then(() => toast('Lien copié !', 'success'));
+}
+
+// ── QR Code ───────────────────────────────────────────────────────────────────
+async function generateQR(url) {
+  const wrap = $('qr-wrap');
+  if (!wrap) return;
+
+  // Load qrcode.js from CDN
+  if (!window.QRCode) {
+    await new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js';
+      s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    }).catch(() => null);
+  }
+
+  if (window.QRCode) {
+    wrap.innerHTML = '';
+    new QRCode(wrap, {
+      text: url,
+      width: 160,
+      height: 160,
+      colorDark: '#000000',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M,
+    });
+  } else {
+    // Fallback: use a QR API
+    const img = document.createElement('img');
+    img.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encodeURIComponent(url)}`;
+    img.width = 160; img.height = 160;
+    wrap.appendChild(img);
+  }
 }
 
 // ── YouTube Player ────────────────────────────────────────────────────────────
 function initYTPlayer() {
   ytPlayer = new YT.Player('yt-player', {
-    height: '100%',
-    width: '100%',
+    height: '100%', width: '100%',
     playerVars: { autoplay: 1, controls: 1, rel: 0, modestbranding: 1 },
     events: {
       onReady: () => { ytReady = true; },
       onStateChange: e => {
-        // YT.PlayerState.ENDED = 0
-        if (e.data === 0) {
-          socket.emit('song-ended', { partyName: currentParty.name });
-        }
+        if (e.data === 0) socket.emit('song-ended', { partyName: currentParty.name });
       },
     },
   });
@@ -386,18 +443,11 @@ function initYTPlayer() {
 socket.on('play-song', (song) => {
   if (!currentParty || currentParty.role !== 'host') return;
   updateNowPlaying(song);
-  if (ytPlayer && ytReady) {
-    ytPlayer.loadVideoById(song.id);
-  }
+  if (ytPlayer && ytReady) ytPlayer.loadVideoById(song.id);
 });
 
-socket.on('now-playing', (song) => {
-  updateNowPlaying(song);
-});
-
-socket.on('queue-updated', ({ queue }) => {
-  updateQueue(queue);
-});
+socket.on('now-playing', (song) => updateNowPlaying(song));
+socket.on('queue-updated', ({ queue }) => updateQueue(queue));
 
 socket.on('presence', ({ hostOnline, guestCount }) => {
   const dot = $('host-dot');
@@ -411,9 +461,7 @@ socket.on('presence', ({ hostOnline, guestCount }) => {
   banner?.classList.toggle('show', !hostOnline && currentParty?.role === 'guest');
 });
 
-socket.on('host-disconnected', () => {
-  $('offline-banner')?.classList.add('show');
-});
+socket.on('host-disconnected', () => $('offline-banner')?.classList.add('show'));
 
 // ── Queue rendering ───────────────────────────────────────────────────────────
 function renderQueueEmpty() {
@@ -427,16 +475,10 @@ function updateQueue(queue) {
   const list = $('queue-list');
   const count = $('queue-count');
   if (!list) return;
-
   count.textContent = `${queue.length} musique(s)`;
-
-  if (queue.length === 0) {
-    list.innerHTML = renderQueueEmpty();
-    return;
-  }
+  if (queue.length === 0) { list.innerHTML = renderQueueEmpty(); return; }
 
   const isHost = currentParty?.role === 'host';
-
   list.innerHTML = queue.map((song, i) => `
     <div class="queue-item">
       <span class="qi-num">${i + 1}</span>
@@ -445,6 +487,7 @@ function updateQueue(queue) {
         <div class="qi-title">${escHtml(song.title)}</div>
         <div class="qi-meta">${escHtml(song.channel || '')}</div>
       </div>
+      <span class="qi-addedby">👤 ${escHtml(song.addedBy || 'Anonyme')}</span>
       <span class="qi-dur">${escHtml(song.duration || '')}</span>
       ${isHost ? `<button class="btn-icon" title="Retirer" onclick="removeFromQueue('${escHtml(song.queueId)}')">✕</button>` : ''}
     </div>
@@ -454,23 +497,20 @@ function updateQueue(queue) {
 function updateNowPlaying(song) {
   const el = $('now-playing-content');
   if (!el) return;
-  if (!song) {
-    el.innerHTML = '<div class="np-empty">Aucune musique en cours</div>';
-    return;
-  }
+  if (!song) { el.innerHTML = '<div class="np-empty">Aucune musique en cours</div>'; return; }
   el.innerHTML = `
     <div class="np-content">
       <img class="np-thumb" src="${escHtml(song.thumbnail)}" alt="">
       <div class="np-info">
         <div class="np-title">${escHtml(song.title)}</div>
-        <div class="np-channel">${escHtml(song.channel || '')}</div>
+        <div class="np-channel">${escHtml(song.channel || '')}${song.addedBy ? ` · 👤 ${escHtml(song.addedBy)}` : ''}</div>
       </div>
     </div>
   `;
 }
 
 function removeFromQueue(queueId) {
-  socket.emit('remove-from-queue', { partyName: currentParty.name, queueId }, (res) => {
+  socket.emit('remove-from-queue', { partyName: currentParty.name, queueId }, res => {
     if (res?.error) toast(res.error, 'error');
   });
 }
@@ -488,13 +528,97 @@ function openSearch() {
 function closeSearch() {
   $('search-modal').style.display = 'none';
   $('search-results').innerHTML = '';
-  $('search-input').value = '';
+  if ($('search-input')) $('search-input').value = '';
+  if ($('url-input')) $('url-input').value = '';
 }
 
 function closeSearchIfOverlay(e) {
   if (e.target === $('search-modal')) closeSearch();
 }
 
+function switchTab(tab) {
+  searchTab = tab;
+  $('tab-search').classList.toggle('active', tab === 'search');
+  $('tab-url').classList.toggle('active', tab === 'url');
+  $('tab-search-content').style.display = tab === 'search' ? '' : 'none';
+  $('tab-url-content').style.display = tab === 'url' ? '' : 'none';
+  $('search-results').innerHTML = '';
+  setTimeout(() => (tab === 'search' ? $('search-input') : $('url-input'))?.focus(), 50);
+}
+
+// ── YouTube Search via Invidious (client-side) ─────────────────────────────────
+async function tryInvidiousSearch(query) {
+  for (const base of INVIDIOUS_INSTANCES) {
+    try {
+      const url = `${base}/api/v1/search?q=${encodeURIComponent(query)}&type=video&fields=videoId,title,author,lengthSeconds,videoThumbnails`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) return data;
+    } catch {}
+  }
+  return null;
+}
+
+async function doSearch() {
+  const q = $('search-input').value.trim();
+  if (!q) return;
+
+  $('search-results').innerHTML = `<div class="search-loading"><div class="spinner"></div>Recherche en cours…</div>`;
+
+  const results = await tryInvidiousSearch(q);
+
+  if (!results) {
+    $('search-results').innerHTML = `
+      <div class="search-empty" style="color:var(--accent)">
+        Recherche indisponible depuis ce réseau.<br>
+        <button class="btn btn-ghost" style="margin-top:.75rem;font-size:.82rem" onclick="switchTab('url')">Utiliser un lien YouTube →</button>
+      </div>`;
+    return;
+  }
+
+  if (results.length === 0) {
+    $('search-results').innerHTML = `<div class="search-empty">Aucun résultat trouvé.</div>`;
+    return;
+  }
+
+  const songs = results.slice(0, 8).map(v => ({
+    id: v.videoId,
+    title: v.title,
+    channel: v.author,
+    thumbnail: (v.videoThumbnails?.find(t => t.quality === 'medium') || v.videoThumbnails?.[0])?.url
+      || `https://img.youtube.com/vi/${v.videoId}/mqdefault.jpg`,
+    duration: formatDuration(v.lengthSeconds),
+  }));
+
+  $('search-results').innerHTML = `<div class="search-results">
+    ${songs.map((v, i) => `
+      <div class="search-result" data-idx="${i}">
+        <img class="sr-thumb" src="${escHtml(v.thumbnail)}" alt="" loading="lazy" onerror="this.src='https://img.youtube.com/vi/${escHtml(v.id)}/mqdefault.jpg'">
+        <div class="sr-info">
+          <div class="sr-title">${escHtml(v.title)}</div>
+          <div class="sr-meta">${escHtml(v.channel || '')} · ${escHtml(v.duration || '')}</div>
+        </div>
+        <button class="btn btn-primary sr-add" data-idx="${i}">＋</button>
+      </div>
+    `).join('')}
+  </div>`;
+
+  document.querySelectorAll('.search-result').forEach(el => {
+    const song = songs[+el.dataset.idx];
+    el.onclick = () => addSongDirect(song);
+    el.querySelector('.sr-add').onclick = e => { e.stopPropagation(); addSongDirect(song); };
+  });
+}
+
+function formatDuration(secs) {
+  if (!secs) return '';
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// ── URL lookup ────────────────────────────────────────────────────────────────
 function extractYouTubeId(input) {
   input = input.trim();
   if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
@@ -506,10 +630,9 @@ function extractYouTubeId(input) {
   return null;
 }
 
-async function doSearch() {
-  const input = $('search-input').value.trim();
+async function doUrlLookup() {
+  const input = $('url-input').value.trim();
   if (!input) return;
-
   const videoId = extractYouTubeId(input);
   if (!videoId) {
     $('search-results').innerHTML = `<div class="search-empty" style="color:var(--accent)">URL invalide. Ex: https://youtube.com/watch?v=dQw4w9WgXcQ</div>`;
@@ -518,65 +641,38 @@ async function doSearch() {
 
   $('search-results').innerHTML = `<div class="search-loading"><div class="spinner"></div>Récupération des infos…</div>`;
 
+  let title = `Vidéo YouTube`;
+  let channel = '';
   try {
-    // Use YouTube oEmbed from the browser (works client-side)
-    const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
-    const res = await fetch(oembedUrl);
-    let title = `Vidéo YouTube (${videoId})`;
-    let channel = '';
+    const res = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
     if (res.ok) {
-      const data = await res.json();
-      title = data.title || title;
-      channel = data.author_name || '';
+      const d = await res.json();
+      title = d.title || title;
+      channel = d.author_name || '';
     }
+  } catch {}
 
-    const song = {
-      id: videoId,
-      title,
-      channel,
-      thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
-      duration: '',
-    };
+  const song = { id: videoId, title, channel, thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`, duration: '' };
+  showSongPreview(song);
+}
 
-    $('search-results').innerHTML = `
-      <div class="search-result" id="preview-result">
-        <img class="sr-thumb" src="${escHtml(song.thumbnail)}" alt="">
-        <div class="sr-info">
-          <div class="sr-title">${escHtml(song.title)}</div>
-          <div class="sr-meta">${escHtml(song.channel)}</div>
-        </div>
-        <button class="btn btn-primary sr-add">＋ Ajouter</button>
+function showSongPreview(song) {
+  $('search-results').innerHTML = `
+    <div class="search-result" id="preview-result">
+      <img class="sr-thumb" src="${escHtml(song.thumbnail)}" alt="">
+      <div class="sr-info">
+        <div class="sr-title">${escHtml(song.title)}</div>
+        <div class="sr-meta">${escHtml(song.channel || '')}</div>
       </div>
-    `;
-    $('preview-result').querySelector('.sr-add').onclick = () => addSongDirect(song);
-    $('preview-result').onclick = () => addSongDirect(song);
-
-  } catch (err) {
-    // oEmbed failed (CORS or network) — add with just the video ID
-    const song = {
-      id: videoId,
-      title: `Vidéo YouTube`,
-      channel: '',
-      thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
-      duration: '',
-    };
-    $('search-results').innerHTML = `
-      <div class="search-result" id="preview-result">
-        <img class="sr-thumb" src="${escHtml(song.thumbnail)}" alt="">
-        <div class="sr-info">
-          <div class="sr-title">${escHtml(song.title)} <span style="color:var(--muted)">(${videoId})</span></div>
-          <div class="sr-meta">Cliquer pour ajouter</div>
-        </div>
-        <button class="btn btn-primary sr-add">＋ Ajouter</button>
-      </div>
-    `;
-    $('preview-result').querySelector('.sr-add').onclick = () => addSongDirect(song);
-    $('preview-result').onclick = () => addSongDirect(song);
-  }
+      <button class="btn btn-primary sr-add">＋ Ajouter</button>
+    </div>
+  `;
+  $('preview-result').onclick = () => addSongDirect(song);
+  $('preview-result').querySelector('.sr-add').onclick = e => { e.stopPropagation(); addSongDirect(song); };
 }
 
 function addSongDirect(song) {
-  socket.emit('add-to-queue', { partyName: currentParty.name, song }, (res) => {
+  socket.emit('add-to-queue', { partyName: currentParty.name, song }, res => {
     if (res?.error) { toast(res.error, 'error'); return; }
     toast(`"${song.title}" ajouté à la file !`, 'success');
     closeSearch();
