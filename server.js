@@ -1,0 +1,209 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const { v4: uuidv4 } = require('uuid');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
+
+app.use(express.json());
+app.use(express.static('public'));
+
+// In-memory party store
+const parties = new Map();
+
+// ─── REST API ────────────────────────────────────────────────────────────────
+
+app.post('/api/party/create', (req, res) => {
+  const { name, password } = req.body;
+  if (!name || !/^[a-zA-Z0-9_-]{2,30}$/.test(name)) {
+    return res.status(400).json({ error: 'Nom de party invalide (2-30 caractères alphanumériques)' });
+  }
+  if (parties.has(name.toLowerCase())) {
+    return res.status(409).json({ error: 'Ce nom de party existe déjà' });
+  }
+  parties.set(name.toLowerCase(), {
+    id: uuidv4(),
+    name: name.toLowerCase(),
+    displayName: name,
+    password: password || null,
+    hostSocketId: null,
+    queue: [],
+    nowPlaying: null,
+    createdAt: new Date(),
+  });
+  res.json({ ok: true, name: name.toLowerCase() });
+});
+
+app.get('/api/party/:name', (req, res) => {
+  const party = parties.get(req.params.name.toLowerCase());
+  if (!party) return res.status(404).json({ error: 'Party introuvable' });
+  res.json({
+    name: party.name,
+    displayName: party.displayName,
+    hasPassword: !!party.password,
+    hostOnline: !!party.hostSocketId,
+    queue: party.queue,
+    nowPlaying: party.nowPlaying,
+  });
+});
+
+app.get('/api/parties', (req, res) => {
+  const list = [...parties.values()].map(p => ({
+    name: p.name,
+    displayName: p.displayName,
+    hasPassword: !!p.password,
+    hostOnline: !!p.hostSocketId,
+    guestCount: io.sockets.adapter.rooms.get(p.name)?.size ?? 0,
+  }));
+  res.json(list);
+});
+
+// Extract video ID from a YouTube URL (server-side validation only)
+app.get('/api/lookup', (req, res) => {
+  const url = req.query.url || '';
+  const id = extractYouTubeId(url);
+  if (!id) return res.status(400).json({ error: 'URL YouTube invalide' });
+  res.json({ id, thumbnail: `https://img.youtube.com/vi/${id}/mqdefault.jpg` });
+});
+
+function extractYouTubeId(input) {
+  input = input.trim();
+  // Plain video ID (11 chars)
+  if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+  try {
+    const u = new URL(input);
+    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1).split('/')[0];
+    if (u.hostname.includes('youtube.com')) return u.searchParams.get('v');
+  } catch {}
+  return null;
+}
+
+// Catch-all → SPA
+app.get('*', (req, res) => res.sendFile(__dirname + '/public/index.html'));
+
+// ─── SOCKET.IO ────────────────────────────────────────────────────────────────
+
+io.on('connection', (socket) => {
+
+  socket.on('join-party', ({ partyName, role, password }, cb) => {
+    const party = parties.get(partyName?.toLowerCase());
+    if (!party) return cb({ error: 'Party introuvable' });
+    if (party.password && party.password !== password) return cb({ error: 'Mot de passe incorrect' });
+
+    if (role === 'host') {
+      if (party.hostSocketId && io.sockets.sockets.get(party.hostSocketId)) {
+        return cb({ error: 'Un host est déjà connecté à cette party' });
+      }
+      party.hostSocketId = socket.id;
+    }
+
+    socket.join(partyName.toLowerCase());
+    socket.data.partyName = partyName.toLowerCase();
+    socket.data.role = role;
+
+    cb({
+      ok: true,
+      queue: party.queue,
+      nowPlaying: party.nowPlaying,
+    });
+
+    io.to(partyName.toLowerCase()).emit('presence', {
+      hostOnline: !!party.hostSocketId,
+      guestCount: (io.sockets.adapter.rooms.get(partyName.toLowerCase())?.size ?? 1) - 1,
+    });
+  });
+
+  socket.on('add-to-queue', ({ partyName, song }, cb) => {
+    const party = parties.get(partyName?.toLowerCase());
+    if (!party) return cb?.({ error: 'Party introuvable' });
+
+    const entry = { ...song, queueId: uuidv4(), addedAt: new Date() };
+    party.queue.push(entry);
+
+    io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });
+
+    // If nothing is playing, tell host to start
+    if (!party.nowPlaying && party.hostSocketId) {
+      const next = party.queue.shift();
+      party.nowPlaying = next;
+      io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });
+      io.to(party.hostSocketId).emit('play-song', next);
+    }
+
+    cb?.({ ok: true });
+  });
+
+  socket.on('song-ended', ({ partyName }) => {
+    const party = parties.get(partyName?.toLowerCase());
+    if (!party) return;
+    if (party.queue.length > 0) {
+      const next = party.queue.shift();
+      party.nowPlaying = next;
+      io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });
+      io.to(partyName.toLowerCase()).emit('now-playing', next);
+      io.to(party.hostSocketId).emit('play-song', next);
+    } else {
+      party.nowPlaying = null;
+      io.to(partyName.toLowerCase()).emit('now-playing', null);
+    }
+  });
+
+  socket.on('remove-from-queue', ({ partyName, queueId }, cb) => {
+    const party = parties.get(partyName?.toLowerCase());
+    if (!party) return cb?.({ error: 'Party introuvable' });
+    if (socket.data.role !== 'host') return cb?.({ error: 'Réservé au host' });
+    party.queue = party.queue.filter(s => s.queueId !== queueId);
+    io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });
+    cb?.({ ok: true });
+  });
+
+  socket.on('skip-song', ({ partyName }) => {
+    const party = parties.get(partyName?.toLowerCase());
+    if (!party || socket.data.role !== 'host') return;
+    // Trigger song-ended logic
+    if (party.queue.length > 0) {
+      const next = party.queue.shift();
+      party.nowPlaying = next;
+      io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });
+      io.to(partyName.toLowerCase()).emit('now-playing', next);
+      io.to(party.hostSocketId).emit('play-song', next);
+    } else {
+      party.nowPlaying = null;
+      io.to(partyName.toLowerCase()).emit('now-playing', null);
+    }
+  });
+
+  socket.on('disconnecting', () => {
+    const partyName = socket.data.partyName;
+    const party = parties.get(partyName);
+    if (!party) return;
+
+    if (party.hostSocketId === socket.id) {
+      party.hostSocketId = null;
+      io.to(partyName).emit('host-disconnected');
+      io.to(partyName).emit('presence', { hostOnline: false });
+    } else {
+      setTimeout(() => {
+        io.to(partyName).emit('presence', {
+          hostOnline: !!party.hostSocketId,
+          guestCount: (io.sockets.adapter.rooms.get(partyName)?.size ?? 1) - 1,
+        });
+      }, 200);
+    }
+  });
+});
+
+// Cleanup stale parties older than 24h with no host
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [name, party] of parties) {
+    if (!party.hostSocketId && party.createdAt < cutoff) {
+      parties.delete(name);
+    }
+  }
+}, 60 * 60 * 1000);
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Jukebox running on http://localhost:${PORT}`));
