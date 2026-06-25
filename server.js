@@ -17,18 +17,21 @@ const parties = new Map();
 // ─── REST API ────────────────────────────────────────────────────────────────
 
 app.post('/api/party/create', (req, res) => {
-  const { name, password } = req.body;
+  const { name, password, theme, logo } = req.body;
   if (!name || !/^[a-zA-Z0-9_-]{2,30}$/.test(name)) {
     return res.status(400).json({ error: 'Nom de party invalide (2-30 caractères alphanumériques)' });
   }
   if (parties.has(name.toLowerCase())) {
     return res.status(409).json({ error: 'Ce nom de party existe déjà' });
   }
+  const validThemes = ['dark', 'ibiza', 'neon', 'minimal'];
   parties.set(name.toLowerCase(), {
     id: uuidv4(),
     name: name.toLowerCase(),
     displayName: name,
     password: password || null,
+    theme: validThemes.includes(theme) ? theme : 'dark',
+    logo: typeof logo === 'string' && logo.length < 200000 ? logo : null,
     hostSocketId: null,
     queue: [],
     nowPlaying: null,
@@ -45,6 +48,8 @@ app.get('/api/party/:name', (req, res) => {
     displayName: party.displayName,
     hasPassword: !!party.password,
     hostOnline: !!party.hostSocketId,
+    theme: party.theme || 'dark',
+    logo: party.logo || null,
     queue: party.queue,
     nowPlaying: party.nowPlaying,
   });

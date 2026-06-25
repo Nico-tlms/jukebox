@@ -4,6 +4,8 @@ let currentParty = null;  // { name, role, guestName }
 let ytPlayer = null;
 let ytReady = false;
 let searchTab = 'search'; // 'search' | 'url'
+let selectedTheme = 'dark';
+let logoDataUrl = null;
 
 // Invidious public instances to try for client-side search
 const INVIDIOUS_INSTANCES = [
@@ -90,7 +92,17 @@ function selectMode(mode) {
   else renderGuestPanel();
 }
 
+const THEMES = [
+  { id: 'dark',    label: '🌑 Dark',    cls: 'th-dark'    },
+  { id: 'ibiza',   label: '🌴 Ibiza',   cls: 'th-ibiza'   },
+  { id: 'neon',    label: '💜 Neon',    cls: 'th-neon'    },
+  { id: 'minimal', label: '☀️ Minimal', cls: 'th-minimal' },
+];
+
 function renderHostPanel() {
+  selectedTheme = 'dark';
+  logoDataUrl = null;
+
   $('mode-panel').innerHTML = `
     <div class="card">
       <div class="card-title">🎧 Créer une party</div>
@@ -104,13 +116,67 @@ function renderHostPanel() {
         <label>Mot de passe (optionnel)</label>
         <input type="password" id="host-pass" placeholder="Laisser vide = party publique" maxlength="50">
       </div>
-      <button class="btn btn-primary" style="width:100%" onclick="createParty()">Créer la party →</button>
+      <div class="form-group">
+        <label>Thème</label>
+        <div class="theme-picker">
+          ${THEMES.map(t => `
+            <div class="theme-opt ${t.id === 'dark' ? 'selected' : ''}" onclick="selectTheme('${t.id}')" id="theme-opt-${t.id}">
+              <div class="th-preview ${t.cls}"></div>
+              <div class="th-name">${t.label}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Logo de la party (optionnel)</label>
+        <div class="logo-upload-area" id="logo-drop" onclick="$('logo-file').click()">
+          <div id="logo-placeholder">📷 Cliquer pour choisir une image</div>
+          <div id="logo-preview-wrap" style="display:none" class="logo-preview">
+            <img id="logo-img-preview" src="" alt="logo">
+            <div>
+              <div style="font-size:.85rem;font-weight:600" id="logo-filename"></div>
+              <button class="btn btn-ghost" style="font-size:.75rem;padding:.25rem .6rem;margin-top:.25rem" onclick="event.stopPropagation();removeLogo()">✕ Supprimer</button>
+            </div>
+          </div>
+        </div>
+        <input type="file" id="logo-file" accept="image/*" style="display:none">
+      </div>
+      <button class="btn btn-primary" style="width:100%;margin-top:.5rem" onclick="createParty()">Créer la party →</button>
     </div>
   `;
+
   $('host-name').addEventListener('input', e => {
     $('url-preview').textContent = `votre-domaine.fr/${e.target.value || '<em>NOMDELAPARTY</em>'}`;
   });
   $('host-name').addEventListener('keydown', e => { if (e.key === 'Enter') createParty(); });
+
+  $('logo-file').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 500 * 1024) { toast('Image trop grande (max 500 Ko)', 'error'); return; }
+    const reader = new FileReader();
+    reader.onload = ev => {
+      logoDataUrl = ev.target.result;
+      $('logo-img-preview').src = logoDataUrl;
+      $('logo-filename').textContent = file.name;
+      $('logo-placeholder').style.display = 'none';
+      $('logo-preview-wrap').style.display = 'flex';
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function selectTheme(id) {
+  selectedTheme = id;
+  document.querySelectorAll('.theme-opt').forEach(el => el.classList.remove('selected'));
+  $(`theme-opt-${id}`).classList.add('selected');
+}
+
+function removeLogo() {
+  logoDataUrl = null;
+  $('logo-file').value = '';
+  $('logo-placeholder').style.display = '';
+  $('logo-preview-wrap').style.display = 'none';
 }
 
 async function createParty() {
@@ -122,7 +188,7 @@ async function createParty() {
     const res = await fetch('/api/party/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, password }),
+      body: JSON.stringify({ name, password, theme: selectedTheme, logo: logoDataUrl }),
     });
     const data = await res.json();
     if (!res.ok) return showError('host-error', data.error);
@@ -207,6 +273,9 @@ async function renderJoinForm(partyName, role) {
   const needsPassword = party.hasPassword;
   const needsName = effectiveRole === 'guest';
 
+  // Preview theme on join screen
+  applyTheme(party.theme || 'dark');
+
   if (!needsPassword && !needsName) {
     renderPartyPage(party, effectiveRole, '', '');
     return;
@@ -255,6 +324,62 @@ async function submitJoin(partyName, role) {
   renderPartyPage(party, role, password, guestName);
 }
 
+// ── Theme application ─────────────────────────────────────────────────────────
+function applyTheme(theme) {
+  document.body.className = document.body.className
+    .replace(/\btheme-\S+/g, '').trim();
+  if (theme && theme !== 'dark') document.body.classList.add(`theme-${theme}`);
+
+  // Remove old Ibiza decorations
+  document.querySelectorAll('.ibiza-sea,.ibiza-palms,.ibiza-reflection,.ibiza-stars').forEach(el => el.remove());
+
+  if (theme === 'ibiza') {
+    // Stars
+    const stars = document.createElement('div');
+    stars.className = 'ibiza-stars';
+    for (let i = 0; i < 60; i++) {
+      const s = document.createElement('span');
+      const size = Math.random() * 2 + 1;
+      s.style.cssText = `width:${size}px;height:${size}px;top:${Math.random()*65}%;left:${Math.random()*100}%;--d:${2+Math.random()*4}s;animation-delay:${Math.random()*4}s`;
+      stars.appendChild(s);
+    }
+    document.body.appendChild(stars);
+
+    // Sea
+    const sea = document.createElement('div');
+    sea.className = 'ibiza-sea';
+    document.body.appendChild(sea);
+
+    // Palm trees (SVG)
+    const palms = document.createElement('div');
+    palms.className = 'ibiza-palms';
+    palms.innerHTML = palmSVG(1) + palmSVG(-1);
+    document.body.appendChild(palms);
+
+    // Sun reflection
+    const ref = document.createElement('div');
+    ref.className = 'ibiza-reflection';
+    document.body.appendChild(ref);
+  }
+}
+
+function palmSVG(flip) {
+  const f = flip < 0 ? 'transform="scale(-1,1) translate(-200,0)"' : '';
+  return `<svg width="200" height="220" viewBox="0 0 200 220" fill="none" xmlns="http://www.w3.org/2000/svg" ${f}>
+    <!-- trunk -->
+    <path d="M95 220 Q88 180 82 150 Q78 120 80 90 Q82 60 90 30" stroke="#4a3520" stroke-width="10" stroke-linecap="round" fill="none"/>
+    <!-- leaves -->
+    <path d="M90 30 Q60 10 20 20 Q50 35 75 55" fill="#2d6a2d"/>
+    <path d="M90 30 Q110 5 150 15 Q120 32 95 52" fill="#3a8c3a"/>
+    <path d="M90 30 Q75 0 90 -20 Q95 10 100 40" fill="#2d6a2d"/>
+    <path d="M90 30 Q55 25 30 45 Q60 45 85 58" fill="#3a8c3a"/>
+    <path d="M90 30 Q120 20 145 40 Q115 42 92 56" fill="#2d6a2d"/>
+    <!-- coconuts -->
+    <circle cx="88" cy="42" r="5" fill="#8B6914"/>
+    <circle cx="96" cy="38" r="4" fill="#7a5c10"/>
+  </svg>`;
+}
+
 // ── Party Page ────────────────────────────────────────────────────────────────
 function renderPartyPage(party, role, password, guestName) {
   currentParty = { name: party.name, role, guestName };
@@ -262,11 +387,15 @@ function renderPartyPage(party, role, password, guestName) {
   const isHost = role === 'host';
   const partyUrl = `${window.location.origin}/${party.name}`;
 
+  applyTheme(party.theme || 'dark');
+
   app().innerHTML = `
     <div class="party-page">
       <div class="offline-banner" id="offline-banner">⚠️ Host hors ligne — la musique est en pause</div>
       <div class="topbar">
-        <span class="topbar-logo">🎵</span>
+        ${party.logo
+          ? `<img class="topbar-party-logo" src="${escHtml(party.logo)}" alt="logo">`
+          : `<span class="topbar-logo">🎵</span>`}
         <span class="topbar-party">${escHtml(party.displayName)}</span>
         <span class="topbar-badge ${isHost ? 'badge-host' : 'badge-guest'}">${isHost ? 'HOST' : escHtml(guestName || 'INVITÉ')}</span>
         <div class="topbar-spacer"></div>
@@ -385,6 +514,7 @@ function renderPartyPage(party, role, password, guestName) {
 }
 
 function leaveParty() {
+  applyTheme('dark');
   navigate('/');
 }
 
