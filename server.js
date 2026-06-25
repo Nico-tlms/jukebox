@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -68,23 +69,74 @@ app.get('/api/parties', (req, res) => {
   res.json(list);
 });
 
-// YouTube search (server-side)
+// YouTube search — API officielle si YOUTUBE_API_KEY dispo, sinon youtube-sr
 app.get('/api/search', async (req, res) => {
   const q = req.query.q;
   if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
   try {
-    const results = await YouTube.search(q, { limit: 8, type: 'video' });
-    res.json(results.map(v => ({
-      id: v.id,
-      title: v.title,
-      thumbnail: v.thumbnail?.url || `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`,
-      duration: v.durationFormatted || '',
-      channel: v.channel?.name || '',
-    })));
+    const results = process.env.YOUTUBE_API_KEY
+      ? await searchWithOfficialAPI(q)
+      : await searchWithScraper(q);
+    res.json(results);
   } catch (e) {
+    console.error('Search error:', e.message);
     res.status(500).json({ error: 'Erreur de recherche YouTube' });
   }
 });
+
+async function searchWithOfficialAPI(q) {
+  const key = process.env.YOUTUBE_API_KEY;
+
+  // Search videos
+  const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&videoCategoryId=10&key=${key}`;
+  const searchRes = await fetch(searchUrl);
+  if (!searchRes.ok) throw new Error(`YouTube API error: ${searchRes.status}`);
+  const searchData = await searchRes.json();
+  if (searchData.error) throw new Error(searchData.error.message);
+
+  const items = searchData.items || [];
+  if (items.length === 0) return [];
+
+  // Fetch durations in one call
+  const ids = items.map(i => i.id.videoId).join(',');
+  const detailUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${ids}&key=${key}`;
+  const detailRes = await fetch(detailUrl);
+  const detailData = detailRes.ok ? await detailRes.json() : { items: [] };
+  const durationMap = Object.fromEntries(
+    (detailData.items || []).map(v => [v.id, parseDuration(v.contentDetails?.duration)])
+  );
+
+  return items.map(i => ({
+    id: i.id.videoId,
+    title: i.snippet.title,
+    channel: i.snippet.channelTitle,
+    thumbnail: i.snippet.thumbnails?.medium?.url || i.snippet.thumbnails?.default?.url || `https://img.youtube.com/vi/${i.id.videoId}/mqdefault.jpg`,
+    duration: durationMap[i.id.videoId] || '',
+  }));
+}
+
+// Parse ISO 8601 duration (PT3M45S → 3:45)
+function parseDuration(iso) {
+  if (!iso) return '';
+  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return '';
+  const h = parseInt(m[1] || 0);
+  const min = parseInt(m[2] || 0);
+  const s = parseInt(m[3] || 0);
+  if (h > 0) return `${h}:${String(min).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${min}:${String(s).padStart(2,'0')}`;
+}
+
+async function searchWithScraper(q) {
+  const results = await YouTube.search(q, { limit: 10, type: 'video' });
+  return results.map(v => ({
+    id: v.id,
+    title: v.title,
+    thumbnail: v.thumbnail?.url || `https://img.youtube.com/vi/${v.id}/mqdefault.jpg`,
+    duration: v.durationFormatted || '',
+    channel: v.channel?.name || '',
+  }));
+}
 
 // Extract video ID from a YouTube URL (server-side validation only)
 app.get('/api/lookup', (req, res) => {
