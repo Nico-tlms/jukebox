@@ -80,7 +80,7 @@ app.get('/api/search', async (req, res) => {
     res.json(results);
   } catch (e) {
     console.error('Search error:', e.message);
-    res.status(500).json({ error: 'Erreur de recherche YouTube' });
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -90,9 +90,12 @@ async function searchWithOfficialAPI(q) {
   // Search videos
   const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&key=${key}`;
   const searchRes = await fetch(searchUrl);
-  if (!searchRes.ok) throw new Error(`YouTube API error: ${searchRes.status}`);
   const searchData = await searchRes.json();
-  if (searchData.error) throw new Error(searchData.error.message);
+  if (!searchRes.ok || searchData.error) {
+    const msg = searchData.error?.message || searchRes.status;
+    console.error('YouTube API error:', JSON.stringify(searchData.error || searchRes.status));
+    throw new Error(`YouTube API: ${msg}`);
+  }
 
   const items = searchData.items || [];
   if (items.length === 0) return [];
