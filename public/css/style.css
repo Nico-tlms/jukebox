@@ -134,7 +134,7 @@ input[type="text"], input[type="password"], input[type="search"] {
   border-radius: 8px;
   padding: .65rem 1rem;
   color: var(--text);
-  font-size: .9rem;
+  font-size: 16px; /* ≥16px évite le zoom automatique sur iOS Safari */
   outline: none;
   transition: border-color .15s;
 }
