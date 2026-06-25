@@ -406,7 +406,7 @@ function renderPartyPage(party, role, password, guestName) {
         <div class="topbar-spacer"></div>
         <div class="presence">
           <span class="dot" id="host-dot"></span>
-          <span id="presence-text">—</span>
+          <span id="presence-text" class="presence-text-full">—</span>
         </div>
         <button class="btn btn-ghost" onclick="leaveParty()" style="font-size:.82rem;padding:.4rem .8rem">Quitter</button>
       </div>
@@ -667,12 +667,16 @@ function updateQueue(queue) {
       <span class="qi-num">${i + 1}</span>
       <img class="qi-thumb" src="${escHtml(song.thumbnail)}" alt="" loading="lazy">
       <div class="qi-info">
-        <div class="qi-title">${escHtml(song.title)}</div>
+        <span class="qi-title">${escHtml(song.title)}</span>
         <div class="qi-meta">${escHtml(song.channel || '')}</div>
       </div>
-      <span class="qi-addedby">👤 ${escHtml(song.addedBy || 'Anonyme')}</span>
-      <span class="qi-dur">${escHtml(song.duration || '')}</span>
-      ${isHost ? `<button class="btn-icon" title="Retirer" onclick="removeFromQueue('${escHtml(song.queueId)}')">✕</button>` : ''}
+      <div class="qi-bottom">
+        <span class="qi-addedby">👤 ${escHtml(song.addedBy || 'Anonyme')}</span>
+        ${song.duration ? `<span class="qi-dur">${escHtml(song.duration)}</span>` : ''}
+      </div>
+      <div class="qi-actions">
+        ${isHost ? `<button class="btn-icon" title="Retirer" onclick="removeFromQueue('${escHtml(song.queueId)}')">✕</button>` : ''}
+      </div>
     </div>
   `).join('');
 }
