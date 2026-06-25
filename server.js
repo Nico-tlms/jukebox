@@ -34,6 +34,7 @@ app.post('/api/party/create', (req, res) => {
     logo: typeof logo === 'string' && logo.length < 200000 ? logo : null,
     hostSocketId: null,
     queue: [],
+    history: [],
     nowPlaying: null,
     createdAt: new Date(),
   });
@@ -51,6 +52,7 @@ app.get('/api/party/:name', (req, res) => {
     theme: party.theme || 'dark',
     logo: party.logo || null,
     queue: party.queue,
+    history: party.history,
     nowPlaying: party.nowPlaying,
   });
 });
@@ -107,6 +109,32 @@ function extractYouTubeId(input) {
 // Catch-all → SPA
 app.get('*', (req, res) => res.sendFile(__dirname + '/public/index.html'));
 
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+function advanceQueue(partyName) {
+  const party = parties.get(partyName?.toLowerCase());
+  if (!party) return;
+
+  // Archive current song in history
+  if (party.nowPlaying) {
+    party.history.unshift({ ...party.nowPlaying, playedAt: new Date() });
+    if (party.history.length > 50) party.history.pop(); // cap at 50
+  }
+
+  if (party.queue.length > 0) {
+    const next = party.queue.shift();
+    party.nowPlaying = next;
+    io.to(partyName).emit('queue-updated', { queue: party.queue });
+    io.to(partyName).emit('now-playing', next);
+    io.to(partyName).emit('history-updated', { history: party.history });
+    if (party.hostSocketId) io.to(party.hostSocketId).emit('play-song', next);
+  } else {
+    party.nowPlaying = null;
+    io.to(partyName).emit('now-playing', null);
+    io.to(partyName).emit('history-updated', { history: party.history });
+  }
+}
+
 // ─── SOCKET.IO ────────────────────────────────────────────────────────────────
 
 io.on('connection', (socket) => {
@@ -131,6 +159,7 @@ io.on('connection', (socket) => {
     cb({
       ok: true,
       queue: party.queue,
+      history: party.history,
       nowPlaying: party.nowPlaying,
     });
 
@@ -161,18 +190,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('song-ended', ({ partyName }) => {
-    const party = parties.get(partyName?.toLowerCase());
-    if (!party) return;
-    if (party.queue.length > 0) {
-      const next = party.queue.shift();
-      party.nowPlaying = next;
-      io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });
-      io.to(partyName.toLowerCase()).emit('now-playing', next);
-      io.to(party.hostSocketId).emit('play-song', next);
-    } else {
-      party.nowPlaying = null;
-      io.to(partyName.toLowerCase()).emit('now-playing', null);
-    }
+    advanceQueue(partyName);
   });
 
   socket.on('remove-from-queue', ({ partyName, queueId }, cb) => {
@@ -187,17 +205,7 @@ io.on('connection', (socket) => {
   socket.on('skip-song', ({ partyName }) => {
     const party = parties.get(partyName?.toLowerCase());
     if (!party || socket.data.role !== 'host') return;
-    // Trigger song-ended logic
-    if (party.queue.length > 0) {
-      const next = party.queue.shift();
-      party.nowPlaying = next;
-      io.to(partyName.toLowerCase()).emit('queue-updated', { queue: party.queue });
-      io.to(partyName.toLowerCase()).emit('now-playing', next);
-      io.to(party.hostSocketId).emit('play-song', next);
-    } else {
-      party.nowPlaying = null;
-      io.to(partyName.toLowerCase()).emit('now-playing', null);
-    }
+    advanceQueue(partyName);
   });
 
   socket.on('disconnecting', () => {

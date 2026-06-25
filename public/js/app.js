@@ -4,6 +4,7 @@ let currentParty = null;  // { name, role, guestName }
 let ytPlayer = null;
 let ytReady = false;
 let searchTab = 'search'; // 'search' | 'url'
+let queueTab = 'queue';   // 'queue' | 'history'
 let selectedTheme = 'dark';
 let logoDataUrl = null;
 
@@ -410,15 +411,14 @@ function renderPartyPage(party, role, password, guestName) {
         <!-- Queue column -->
         <div class="queue-panel">
           <div class="queue-header">
-            <div>
-              <div class="queue-title">File d'attente</div>
-              <div class="queue-count" id="queue-count">0 musique(s)</div>
+            <div class="queue-tabs">
+              <button class="queue-tab active" id="qtab-queue" onclick="switchQueueTab('queue')">🎵 File d'attente <span id="queue-count" style="opacity:.6;font-weight:400"></span></button>
+              <button class="queue-tab" id="qtab-history" onclick="switchQueueTab('history')">🕓 Historique <span id="history-count" style="opacity:.6;font-weight:400"></span></button>
             </div>
             <button class="btn-add-big" onclick="openSearch()" title="Ajouter une musique">＋</button>
           </div>
-          <div class="queue-list" id="queue-list">
-            ${renderQueueEmpty()}
-          </div>
+          <div id="queue-list">${renderQueueEmpty()}</div>
+          <div id="history-list" style="display:none">${renderHistoryEmpty()}</div>
         </div>
 
         <!-- Player column -->
@@ -486,6 +486,8 @@ function renderPartyPage(party, role, password, guestName) {
   `;
 
   // Socket join
+  queueTab = 'queue';
+
   socket.emit('join-party', { partyName: party.name, role, password, guestName }, (res) => {
     if (res.error) {
       toast(res.error, 'error');
@@ -493,6 +495,7 @@ function renderPartyPage(party, role, password, guestName) {
       return;
     }
     updateQueue(res.queue || []);
+    updateHistory(res.history || []);
     updateNowPlaying(res.nowPlaying);
   });
 
@@ -578,6 +581,7 @@ socket.on('play-song', (song) => {
 
 socket.on('now-playing', (song) => updateNowPlaying(song));
 socket.on('queue-updated', ({ queue }) => updateQueue(queue));
+socket.on('history-updated', ({ history }) => updateHistory(history));
 
 socket.on('presence', ({ hostOnline, guestCount }) => {
   const dot = $('host-dot');
@@ -594,6 +598,14 @@ socket.on('presence', ({ hostOnline, guestCount }) => {
 socket.on('host-disconnected', () => $('offline-banner')?.classList.add('show'));
 
 // ── Queue rendering ───────────────────────────────────────────────────────────
+function switchQueueTab(tab) {
+  queueTab = tab;
+  $('qtab-queue').classList.toggle('active', tab === 'queue');
+  $('qtab-history').classList.toggle('active', tab === 'history');
+  $('queue-list').style.display = tab === 'queue' ? '' : 'none';
+  $('history-list').style.display = tab === 'history' ? '' : 'none';
+}
+
 function renderQueueEmpty() {
   return `<div class="queue-empty">
     <div class="empty-icon">🎶</div>
@@ -601,11 +613,48 @@ function renderQueueEmpty() {
   </div>`;
 }
 
+function renderHistoryEmpty() {
+  return `<div class="history-empty">
+    <div class="empty-icon">🎶</div>
+    <p>Aucune musique jouée pour l'instant.</p>
+  </div>`;
+}
+
+function updateHistory(history) {
+  const el = $('history-list');
+  const count = $('history-count');
+  if (!el) return;
+  count.textContent = history.length > 0 ? `(${history.length})` : '';
+  if (history.length === 0) { el.innerHTML = renderHistoryEmpty(); return; }
+
+  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:.5rem">
+    ${history.map(song => `
+      <div class="history-item">
+        <img class="hi-thumb" src="${escHtml(song.thumbnail)}" alt="" loading="lazy">
+        <div class="hi-info">
+          <div class="hi-title">${escHtml(song.title)}</div>
+          <div class="hi-meta">
+            <span>👤 ${escHtml(song.addedBy || 'Anonyme')}</span>
+            ${song.channel ? `<span>· ${escHtml(song.channel)}</span>` : ''}
+          </div>
+        </div>
+        <div class="hi-time">${formatTime(song.playedAt)}</div>
+      </div>
+    `).join('')}
+  </div>`;
+}
+
+function formatTime(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
+
 function updateQueue(queue) {
   const list = $('queue-list');
   const count = $('queue-count');
   if (!list) return;
-  count.textContent = `${queue.length} musique(s)`;
+  count.textContent = queue.length > 0 ? `(${queue.length})` : '';
   if (queue.length === 0) { list.innerHTML = renderQueueEmpty(); return; }
 
   const isHost = currentParty?.role === 'host';
