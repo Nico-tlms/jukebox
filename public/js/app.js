@@ -133,7 +133,7 @@ function renderHostPanel() {
         </div>
       </div>
       <div class="form-group">
-        <label>Logo de la party (optionnel)</label>
+        <label>Logo de la party (optionnel, max 4 Mo)</label>
         <div class="logo-upload-area" id="logo-drop" onclick="$('logo-file').click()">
           <div id="logo-placeholder">📷 Cliquer pour choisir une image</div>
           <div id="logo-preview-wrap" style="display:none" class="logo-preview">
@@ -158,7 +158,7 @@ function renderHostPanel() {
   $('logo-file').addEventListener('change', e => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 500 * 1024) { toast('Image trop grande (max 500 Ko)', 'error'); return; }
+    if (file.size > 4 * 1024 * 1024) { toast('Image trop grande (max 4 Mo)', 'error'); return; }
     const reader = new FileReader();
     reader.onload = ev => {
       logoDataUrl = ev.target.result;
@@ -397,10 +397,13 @@ function renderPartyPage(party, role, password, guestName) {
   app().innerHTML = `
     <div class="party-page">
       <div class="offline-banner" id="offline-banner">⚠️ Host hors ligne — la musique est en pause</div>
-      <div class="topbar">
-        ${party.logo
-          ? `<img class="topbar-party-logo" src="${escHtml(party.logo)}" alt="logo">`
-          : `<span class="topbar-logo">🎵</span>`}
+      ${party.logo ? `
+      <div class="party-hero">
+        <img class="party-hero-logo" src="${escHtml(party.logo)}" alt="${escHtml(party.displayName)}">
+      </div>
+      ` : ''}
+      <div class="topbar ${party.logo ? 'topbar-no-logo' : ''}">
+        ${!party.logo ? `<span class="topbar-logo">🎵</span>` : ''}
         <span class="topbar-party">${escHtml(party.displayName)}</span>
         <span class="topbar-badge ${isHost ? 'badge-host' : 'badge-guest'}">${isHost ? 'HOST' : escHtml(guestName || 'INVITÉ')}</span>
         <div class="topbar-spacer"></div>

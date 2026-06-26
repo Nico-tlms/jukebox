@@ -32,7 +32,7 @@ app.post('/api/party/create', (req, res) => {
     displayName: name,
     password: password || null,
     theme: validThemes.includes(theme) ? theme : 'dark',
-    logo: typeof logo === 'string' && logo.length < 200000 ? logo : null,
+    logo: typeof logo === 'string' && logo.length < 6000000 ? logo : null,
     hostSocketId: null,
     queue: [],
     history: [],

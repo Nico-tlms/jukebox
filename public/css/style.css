@@ -293,7 +293,30 @@ input::placeholder { color: var(--muted); }
 .error-msg { background: rgba(255,45,85,.12); border: 1px solid rgba(255,45,85,.3); border-radius: 8px; padding: .65rem 1rem; font-size: .85rem; color: var(--accent); margin-bottom: 1rem; }
 
 /* ── Party page ── */
-.party-page { display: grid; grid-template-rows: auto auto 1fr; min-height: 100vh; }
+.party-page { display: grid; grid-template-rows: auto auto auto 1fr; min-height: 100vh; }
+
+/* ── Hero logo banner ── */
+.party-hero {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem 1rem 1.25rem;
+  background: var(--bg);
+}
+.party-hero-logo {
+  max-width: min(420px, 80vw);
+  max-height: 180px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 16px;
+  filter: drop-shadow(0 6px 24px rgba(0,0,0,.5));
+}
+@media (max-width: 520px) {
+  .party-hero { padding: 1.25rem .75rem .75rem; }
+  .party-hero-logo { max-height: 120px; }
+}
 .topbar {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
