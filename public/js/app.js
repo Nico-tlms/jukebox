@@ -742,7 +742,11 @@ async function searchYouTubeAPI(q, key) {
   const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&q=${encodeURIComponent(q)}&maxResults=10&key=${key}`;
   const searchRes = await fetch(searchUrl);
   const searchData = await searchRes.json();
-  if (!searchRes.ok || searchData.error) throw new Error(searchData.error?.message || `Erreur ${searchRes.status}`);
+  if (!searchRes.ok || searchData.error) {
+    const err = new Error(searchData.error?.message || `Erreur ${searchRes.status}`);
+    err.reason = searchData.error?.errors?.[0]?.reason || '';
+    throw err;
+  }
 
   const items = searchData.items || [];
   if (items.length === 0) return [];
@@ -796,19 +800,22 @@ async function doSearch() {
   let songs = null;
   let searchError = null;
 
+  let quotaExceeded = false;
+
   // 1. API officielle depuis le navigateur (le browser envoie le bon Referer)
   if (ytApiKey) {
     try {
       songs = await searchYouTubeAPI(q, ytApiKey);
     } catch (e) {
-      searchError = e.message;
+      quotaExceeded = e.reason === 'quotaExceeded' || e.reason === 'dailyLimitExceeded';
+      if (!quotaExceeded) searchError = e.message;
     }
   }
 
-  // 2. Fallback : scraper serveur
+  // 2. Fallback : scraper serveur (toujours tenté si quota dépassé ou pas de clé)
   if (!songs) {
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&force=${quotaExceeded ? '1' : '0'}`);
       const data = await res.json();
       if (res.ok && Array.isArray(data) && data.length > 0) songs = data;
       else if (!res.ok && data.error !== 'USE_CLIENT_API') searchError = data.error;

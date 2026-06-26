@@ -78,7 +78,7 @@ app.get('/api/yt-config', (req, res) => {
 app.get('/api/search', async (req, res) => {
   const q = req.query.q;
   if (!q) return res.status(400).json({ error: 'Paramètre q requis' });
-  if (process.env.YOUTUBE_API_KEY) {
+  if (process.env.YOUTUBE_API_KEY && req.query.force !== '1') {
     return res.status(400).json({ error: 'USE_CLIENT_API' });
   }
   try {
