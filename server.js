@@ -9,7 +9,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));
 app.use(express.static('public'));
 
 // In-memory party store
