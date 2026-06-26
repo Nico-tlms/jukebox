@@ -397,12 +397,7 @@ function renderPartyPage(party, role, password, guestName) {
   app().innerHTML = `
     <div class="party-page">
       <div class="offline-banner" id="offline-banner">⚠️ Host hors ligne — la musique est en pause</div>
-      ${party.logo ? `
-      <div class="party-hero">
-        <img class="party-hero-logo" src="${escHtml(party.logo)}" alt="${escHtml(party.displayName)}">
-      </div>
-      ` : ''}
-      <div class="topbar ${party.logo ? 'topbar-no-logo' : ''}">
+      <div class="topbar">
         ${!party.logo ? `<span class="topbar-logo">🎵</span>` : ''}
         <span class="topbar-party">${escHtml(party.displayName)}</span>
         <span class="topbar-badge ${isHost ? 'badge-host' : 'badge-guest'}">${isHost ? 'HOST' : escHtml(guestName || 'INVITÉ')}</span>
@@ -413,6 +408,12 @@ function renderPartyPage(party, role, password, guestName) {
         </div>
         <button class="btn btn-ghost" onclick="leaveParty()" style="font-size:.82rem;padding:.4rem .8rem">Quitter</button>
       </div>
+
+      ${party.logo ? `
+      <div class="party-hero">
+        <img class="party-hero-logo" src="${escHtml(party.logo)}" alt="${escHtml(party.displayName)}">
+      </div>
+      ` : ''}
 
       <div class="party-body">
         <!-- Queue column -->
